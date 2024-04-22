@@ -137,14 +137,15 @@ class Bot(disnake.Client):
         """Construct the leaderboard for a guild and date."""
 
         solves = Solve.filter(guild_id=guild.id, date=date).order_by(Solve.seconds.asc(), Solve.timestamp.asc())
-        members = await guild.get_or_fetch_members([solve.user_id for solve in solves])
+        await guild.get_or_fetch_members([solve.user_id for solve in solves])
 
         leaderboard = Leaderboard(date)
         position = 1
         last_seconds = None
-        for solve, member in zip(solves, members):
+        for solve in solves:
             if last_seconds is not None and solve.seconds > last_seconds:
                 position += 1
+            member = guild.get_member(solve.user_id)
             leaderboard.entries.append(LeaderboardEntry(position, member, solve.seconds))
             last_seconds = solve.seconds
 
