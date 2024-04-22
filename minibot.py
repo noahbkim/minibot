@@ -4,6 +4,7 @@ import configparser
 import datetime
 import re
 import shlex
+from dataclasses import dataclass, field
 
 import disnake
 import disnake.abc
@@ -17,6 +18,12 @@ BADGE_PATTERN = re.compile(
     r"\?d=(\d{4}-\d{2}-\d{2})"
     r"&t=(\d+)"
     r"&c=([a-fA-F0-9]+)"
+)
+
+# I solved the 4/21/2024 New York Times Mini Crossword in 0:52! https://www.nytimes.com/crosswords/game/mini
+NEW_PATTERN = re.compile(
+    r"I solved the (\d{1,2}/\d{1,2}/\d{4}) New York Times Mini Crossword in ((?:\d+:)?\d{1,2}:\d{2})!"
+    r" https://www\.nytimes\.com/crosswords/game/mini"
 )
 
 US_EASTERN = pytz.timezone("US/Eastern")
@@ -35,6 +42,10 @@ def get_mini_crossword_image(c: str, d: str, t: str) -> bytes:
 def format_time(seconds: int) -> str:
     minutes, seconds = divmod(seconds, 60)
     return f"{minutes}:{seconds:02d}"
+
+
+def format_date(date: datetime.date) -> str:
+    return f"{date.year:04d}-{date.month:02d}-{date.day:02d}"
 
 
 def today(timezone: pytz.tzinfo) -> datetime.date:
@@ -67,6 +78,36 @@ class Snowflake(disnake.abc.Snowflake):
         self.id = id_
 
 
+@dataclass
+class LeaderboardEntry:
+    """A user on the leaderboard."""
+
+    position: int
+    member: disnake.Member
+    seconds: int
+
+
+@dataclass
+class Leaderboard:
+    """Structured leaderboard data."""
+
+    date: datetime.date
+    entries: list[LeaderboardEntry] = field(default_factory=list)
+
+    def render(self) -> str:
+        """Render the leaderboard in a message."""
+
+        if not self.entries:
+            return f"No leaderboard for {format_date(self.date)}"
+
+        rows = []
+        for entry in self.entries:
+            end = " :crown:" if entry.position == 1 else ""
+            rows.append(f"{entry.position}. {entry.member.display_name} ({format_time(entry.seconds)}){end}")
+
+        return "\n".join(rows)
+
+
 class Bot(disnake.Client):
     """Custom implementation of a command handler."""
 
@@ -92,30 +133,74 @@ class Bot(disnake.Client):
         token = {"token": self.token} if self.token is not None else {}
         return super().run(*args, **kwargs, **token)
 
-    async def get_leaderboard(self, guild: disnake.Guild, date: datetime.date) -> str:
+    async def get_leaderboard(self, guild: disnake.Guild, date: datetime.date) -> Leaderboard:
         """Construct the leaderboard for a guild and date."""
 
         solves = Solve.filter(guild_id=guild.id, date=date).order_by(Solve.seconds.asc(), Solve.timestamp.asc())
         members = await guild.get_or_fetch_members([solve.user_id for solve in solves])
 
-        leaderboard = []
+        leaderboard = Leaderboard(date)
         position = 1
         last_seconds = None
         for solve, member in zip(solves, members):
-            tag = " :crown:"
             if last_seconds is not None and solve.seconds > last_seconds:
                 position += 1
-                tag = ""
-            leaderboard.append(f"{position}. {member.display_name} ({format_time(solve.seconds)}){tag}")
+            leaderboard.entries.append(LeaderboardEntry(position, member, solve.seconds))
             last_seconds = solve.seconds
 
-        if leaderboard:
-            return "\n".join(leaderboard)
+        return leaderboard
 
-        return f"No leaderboard for {date.year:04d}-{date.month:02d}-{date.day:02d}"
+    async def on_mini_crossword_solve(
+        self,
+        message: disnake.Message,
+        date: datetime.date,
+        seconds: int,
+        checksum: str = "",
+    ) -> None:
+        """Save the solve and print the leaderboard."""
+
+        solve, created = Solve.get_or_create(
+            user_id=message.author.id,
+            guild_id=message.guild.id,
+            date=date,
+            defaults=dict(seconds=seconds, checksum=checksum),
+        )
+
+        if not created:
+            if solve.seconds != seconds:
+                solve.seconds = seconds
+                solve.checksum = checksum
+                solve.save()
+
+        leaderboard = await self.get_leaderboard(message.guild, date)
+        color: disnake.Color | None = None
+        for entry in leaderboard.entries:
+            if entry.position == 1:
+                if not entry.member.get_role(self.king_role_id):
+                    await entry.member.add_roles(Snowflake(self.king_role_id))
+                if entry.member.id == message.author.id:
+                    color = disnake.Color.gold()
+            else:
+                if role := entry.member.get_role(self.king_role_id):
+                    await entry.member.remove_roles(role)
+
+        embed = disnake.Embed(
+            title=f"{message.author.display_name} solved the {format_date(date)} mini in {format_time(seconds)}",
+            description=leaderboard.render(),
+            color=color,
+        )
+        embed.set_thumbnail(
+            url=f"https://www.nytimes.com/badges/games/mini.jpg?c={checksum}&d={format_date(date)}&t={seconds}"
+        )
+
+        await message.channel.send(embed=embed)
+        await message.delete()
 
     async def on_message(self, message: disnake.Message):
         """Listen for crossword messages."""
+
+        if message.author.bot:
+            return
 
         if match := BADGE_PATTERN.match(message.content):
             d, t, c = match.groups()
@@ -123,32 +208,22 @@ class Bot(disnake.Client):
                 await message.add_reaction("\N{NO ENTRY SIGN}")
                 return
 
-            seconds = int(t)
-            date = datetime.datetime.strptime(d, "%Y-%m-%d").date()
-            solve, created = Solve.get_or_create(
-                user_id=message.author.id,
-                guild_id=message.guild.id,
-                date=date,
-                defaults=dict(seconds=seconds, checksum=c),
+            await self.on_mini_crossword_solve(
+                message,
+                date=datetime.datetime.strptime(d, "%Y-%m-%d").date(),
+                seconds=int(t),
+                checksum=c,
             )
+            return
 
-            if not created:
-                if solve.seconds != seconds:
-                    solve.seconds = seconds
-                    solve.checksum = c
-                    solve.save()
-
-            embed = disnake.Embed(
-                title=f"{message.author.display_name} solved the {d} mini in {format_time(seconds)}",
-                description=await self.get_leaderboard(message.guild, date),
-                # color=disnake.Colour.brand_green() if new_elo >= player.elo else disnake.Colour.brand_red(),
+        elif match := NEW_PATTERN.match(message.content):
+            d, t = match.groups()
+            time = sum(60 ** i * x for i, x in enumerate(map(int, reversed(t.split(":")))))
+            await self.on_mini_crossword_solve(
+                message,
+                date=datetime.datetime.strptime(d, "%m/%d/%Y").date(),
+                seconds=time,
             )
-            embed.set_thumbnail(url=f"https://www.nytimes.com/badges/games/mini.jpg?c={c}&d={d}&t={t}")
-            embed.set_footer(text="This bot only detects messages that start with a solve link")
-
-            await message.channel.send(embed=embed)
-            await message.delete()
-
             return
 
         elif message.content.startswith("%nyt "):
@@ -167,7 +242,7 @@ class Bot(disnake.Client):
                     date = today(US_EASTERN)
 
                 leaderboard = await self.get_leaderboard(message.guild, date)
-                await message.channel.send(leaderboard)
+                await message.channel.send(leaderboard.render())
 
 
 def main():
