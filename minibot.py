@@ -114,6 +114,7 @@ class Bot(disnake.Client):
     prefix: str
     debug_channel_id: int | None
     king_role_id: int | None
+    king_role: disnake.Role | None
 
     def __init__(self, config: configparser.ConfigParser) -> None:
         """Propagate config sections to plugins."""
@@ -177,13 +178,8 @@ class Bot(disnake.Client):
         color: disnake.Color | None = None
         for entry in leaderboard.entries:
             if entry.position == 1:
-                if not entry.member.get_role(self.king_role_id):
-                    await entry.member.add_roles(Snowflake(self.king_role_id))
                 if entry.member.id == message.author.id:
                     color = disnake.Color.gold()
-            else:
-                if role := entry.member.get_role(self.king_role_id):
-                    await entry.member.remove_roles(role)
 
         embed = disnake.Embed(
             title=f"{message.author.display_name} solved the {format_date(date)} mini in {format_time(seconds)}",
