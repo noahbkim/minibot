@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import configparser
+import csv
 import datetime
+import io
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -240,6 +242,18 @@ class Bot(disnake.Client):
 
                 leaderboard = await self.get_leaderboard(message.guild, date)
                 await message.channel.send(leaderboard.render())
+
+            elif parts[0] == "d" or parts[0] == "dump":
+                display_names = {}
+                fp = io.StringIO()
+                writer = csv.writer(fp)
+                writer.writerow(("display_name", "timestamp", "date", "seconds"))
+                for solve in Solve.filter(Solve.guild_id == message.guild.id):
+                    if (display_name := display_names.get(solve.user_id)) is None:
+                        display_name = display_names[solve.user_id] = (await self.fetch_user(solve.user_id)).display_name
+                    writer.writerow((display_name, solve.timestamp, solve.date, solve.seconds))
+                bfp = io.BytesIO(fp.getvalue().encode())
+                await message.reply(file=disnake.File(bfp, "solves.csv"))
 
 
 def main():
