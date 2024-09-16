@@ -260,7 +260,7 @@ class Bot(disnake.Client):
             if len(parts) == 0:
                 return
 
-            if parts[0] == "l" or parts[0] == "leaderboard":
+            elif parts[0] == "l" or parts[0] == "leaderboard":
                 if len(parts) >= 2:
                     try:
                         date = datetime.datetime.strptime(parts[1], "%Y-%m-%d")
@@ -270,9 +270,22 @@ class Bot(disnake.Client):
                 else:
                     date = today(US_EASTERN)
 
-                kind = "crossword" if len(parts) >= 2 and parts[1] == "crossword" else "mini"
-                leaderboard = await self.get_leaderboard(message.guild, date, kind)
+                leaderboard = await self.get_leaderboard(message.guild, date, kind="mini")
                 await message.channel.send(leaderboard.render())
+
+            elif parts[0] == "cl" or parts[0] == "crossword-leaderboard":
+                if len(parts) >= 2:
+                    try:
+                        date = datetime.datetime.strptime(parts[1], "%Y-%m-%d")
+                    except ValueError:
+                        await message.reply("invalid date")
+                        return
+                else:
+                    date = today(US_EASTERN)
+
+                leaderboard = await self.get_leaderboard(message.guild, date, kind="crossword")
+                await message.channel.send(leaderboard.render())
+                return
 
             elif parts[0] == "d" or parts[0] == "dump":
                 display_names = {}
@@ -285,6 +298,11 @@ class Bot(disnake.Client):
                     writer.writerow((display_name, solve.timestamp, solve.date, solve.seconds))
                 bfp = io.BytesIO(fp.getvalue().encode())
                 await message.reply(file=disnake.File(bfp, "solves.csv"))
+                return
+                
+            else:
+                await message.reply("Commands are `l/leaderboard`, `cl/crossword-leaderboard`, and `d/dump`")
+                return
 
 
 def main():
