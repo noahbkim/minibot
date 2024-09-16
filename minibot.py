@@ -28,6 +28,11 @@ NEW_PATTERN = re.compile(
     r" https://www\.nytimes\.com/crosswords/game/mini"
 )
 
+DAILY_PATTERN = re.compile(
+    r"I solved the (\w+) (\d{1,2}/\d{1,2}/\d{4}) New York Times Daily Crossword in ((?:\d+:)?\d{1,2}:\d{2})!"
+    r" https://www\.nytimes\.com/crosswords/game/by-id/"
+)
+
 US_EASTERN = pytz.timezone("US/Eastern")
 
 database = peewee.SqliteDatabase("minibot.db")
@@ -64,6 +69,7 @@ class Solve(peewee.Model):
     guild_id = peewee.BigIntegerField()
     timestamp = peewee.TimestampField(default=datetime.datetime.now, utc=True)
 
+    kind = peewee.CharField(max_length=32)
     date = peewee.DateField()
     seconds = peewee.SmallIntegerField()
     checksum = peewee.CharField(max_length=32)
@@ -136,10 +142,18 @@ class Bot(disnake.Client):
         token = {"token": self.token} if self.token is not None else {}
         return super().run(*args, **kwargs, **token)
 
-    async def get_leaderboard(self, guild: disnake.Guild, date: datetime.date) -> Leaderboard:
+    async def get_leaderboard(self, guild: disnake.Guild, date: datetime.date, kind: str) -> Leaderboard:
         """Construct the leaderboard for a guild and date."""
 
-        solves = Solve.filter(guild_id=guild.id, date=date).order_by(Solve.seconds.asc(), Solve.timestamp.asc())
+        solves = Solve.filter(
+            guild_id=guild.id,
+            kind=kind,
+            date=date,
+        ).order_by(
+            Solve.seconds.asc(),
+            Solve.timestamp.asc(),
+        )
+        
         await guild.get_or_fetch_members([solve.user_id for solve in solves])
 
         leaderboard = Leaderboard(date)
@@ -154,11 +168,12 @@ class Bot(disnake.Client):
 
         return leaderboard
 
-    async def on_mini_crossword_solve(
+    async def on_crossword_solve(
         self,
         message: disnake.Message,
         date: datetime.date,
         seconds: int,
+        kind: str,
         checksum: str = "",
     ) -> None:
         """Save the solve and print the leaderboard."""
@@ -167,6 +182,7 @@ class Bot(disnake.Client):
             user_id=message.author.id,
             guild_id=message.guild.id,
             date=date,
+            kind=kind,
             defaults=dict(seconds=seconds, checksum=checksum),
         )
 
@@ -176,7 +192,7 @@ class Bot(disnake.Client):
                 solve.checksum = checksum
                 solve.save()
 
-        leaderboard = await self.get_leaderboard(message.guild, date)
+        leaderboard = await self.get_leaderboard(message.guild, date, kind)
         color: disnake.Color | None = None
         for entry in leaderboard.entries:
             if entry.position == 1:
@@ -184,12 +200,9 @@ class Bot(disnake.Client):
                     color = disnake.Color.gold()
 
         embed = disnake.Embed(
-            title=f"{message.author.display_name} solved the {format_date(date)} mini in {format_time(seconds)}",
+            title=f"{message.author.display_name} solved the {format_date(date)} {kind} in {format_time(seconds)}",
             description=leaderboard.render(),
             color=color,
-        )
-        embed.set_thumbnail(
-            url=f"https://www.nytimes.com/badges/games/mini.jpg?c={checksum}&d={format_date(date)}&t={seconds}"
         )
 
         await message.channel.send(embed=embed)
@@ -217,13 +230,24 @@ class Bot(disnake.Client):
 
         elif match := NEW_PATTERN.match(message.content):
             d, t = match.groups()
-            time = sum(60 ** i * x for i, x in enumerate(map(int, reversed(t.split(":")))))
-            await self.on_mini_crossword_solve(
+            seconds = sum(60 ** i * x for i, x in enumerate(map(int, reversed(t.split(":")))))
+            await self.on_crossword_solve(
                 message,
                 date=datetime.datetime.strptime(d, "%m/%d/%Y").date(),
-                seconds=time,
+                seconds=seconds,
+                kind="mini",
             )
             return
+        
+        elif match := DAILY_PATTERN.match(message.content):
+            day, d, t = match.groups()
+            seconds = sum(60 ** i * x for i, x in enumerate(map(int, reversed(t.split(":")))))
+            await self.on_crossword_solve(
+                message,
+                date=datetime.datetime.strptime(d, "%m/%d/%Y").date(),
+                seconds=seconds,
+                kind=day.lower(),
+            )
 
         elif message.content.startswith("%nyt "):
             parts = shlex.split(message.content[5:].strip())
