@@ -25,12 +25,10 @@ BADGE_PATTERN = re.compile(
 # I solved the 4/21/2024 New York Times Mini Crossword in 0:52! https://www.nytimes.com/crosswords/game/mini
 NEW_PATTERN = re.compile(
     r"I solved the (\d{1,2}/\d{1,2}/\d{4}) New York Times Mini Crossword in ((?:\d+:)?\d{1,2}:\d{2})!"
-    r" https://www\.nytimes\.com/crosswords/game/mini"
 )
 
 DAILY_PATTERN = re.compile(
     r"I solved the (\w+) (\d{1,2}/\d{1,2}/\d{4}) New York Times Daily Crossword in ((?:\d+:)?\d{1,2}:\d{2})!"
-    r" https://www\.nytimes\.com/crosswords/game/by-id/"
 )
 
 US_EASTERN = pytz.timezone("US/Eastern")
@@ -68,15 +66,17 @@ class Solve(peewee.Model):
     user_id = peewee.BigIntegerField()
     guild_id = peewee.BigIntegerField()
     timestamp = peewee.TimestampField(default=datetime.datetime.now, utc=True)
-
+    
     kind = peewee.CharField(max_length=32)
     date = peewee.DateField()
+
+    day = peewee.CharField(max_length=32)
     seconds = peewee.SmallIntegerField()
     checksum = peewee.CharField(max_length=32)
 
     class Meta:
         database = database
-        indexes = ((("user_id", "guild_id", "date"), True),)
+        indexes = ((("user_id", "guild_id", "kind", "date"), True),)
 
 
 class Snowflake(disnake.abc.Snowflake):
@@ -174,16 +174,20 @@ class Bot(disnake.Client):
         date: datetime.date,
         seconds: int,
         kind: str,
+        day: str | None = None,
         checksum: str = "",
     ) -> None:
         """Save the solve and print the leaderboard."""
+
+        if day is None:
+            day = date.strftime("%A").lower()
 
         solve, created = Solve.get_or_create(
             user_id=message.author.id,
             guild_id=message.guild.id,
             date=date,
             kind=kind,
-            defaults=dict(seconds=seconds, checksum=checksum),
+            defaults=dict(day=day, seconds=seconds, checksum=checksum),
         )
 
         if not created:
@@ -214,7 +218,7 @@ class Bot(disnake.Client):
         if message.author.bot:
             return
 
-        if match := BADGE_PATTERN.match(message.content):
+        elif match := BADGE_PATTERN.match(message.content):
             d, t, c = match.groups()
             if get_mini_crossword_image(c, d, t) == get_mini_crossword_image_base():
                 await message.add_reaction("\N{NO ENTRY SIGN}")
@@ -246,8 +250,10 @@ class Bot(disnake.Client):
                 message,
                 date=datetime.datetime.strptime(d, "%m/%d/%Y").date(),
                 seconds=seconds,
-                kind=day.lower(),
+                kind="crossword",
+                day=day,
             )
+            return
 
         elif message.content.startswith("%nyt "):
             parts = shlex.split(message.content[5:].strip())
@@ -259,12 +265,13 @@ class Bot(disnake.Client):
                     try:
                         date = datetime.datetime.strptime(parts[1], "%Y-%m-%d")
                     except ValueError:
-                        await message.reply()
+                        await message.reply("invalid date")
                         return
                 else:
                     date = today(US_EASTERN)
 
-                leaderboard = await self.get_leaderboard(message.guild, date)
+                kind = "crossword" if len(parts) >= 2 and parts[1] == "crossword" else "mini"
+                leaderboard = await self.get_leaderboard(message.guild, date, kind)
                 await message.channel.send(leaderboard.render())
 
             elif parts[0] == "d" or parts[0] == "dump":
