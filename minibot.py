@@ -224,11 +224,12 @@ class Bot(disnake.Client):
                 await message.add_reaction("\N{NO ENTRY SIGN}")
                 return
 
-            await self.on_mini_crossword_solve(
+            await self.on_crossword_solve(
                 message,
                 date=datetime.datetime.strptime(d, "%Y-%m-%d").date(),
                 seconds=int(t),
                 checksum=c,
+                kind="mini",
             )
             return
 
