@@ -15,8 +15,9 @@ import pytz
 import requests
 
 # https://www.nytimes.com/shared/v2/mini-xwd.html?d=2026-02-27&t=24&c=657efcfe40422698b79a1af553e6d7b4&smid=url-share
+# https://www.nytimes.com/badges/games/mini.html?d=2024-04-20&t=78&c=514e32e822ac4633fccf33efc3da2698
 BADGE_PATTERN = re.compile(
-    r"https://www\.nytimes\.com/shared/v2/mini-xwd\.html"
+    r"https://www\.nytimes\.com/(?:shared/v2/mini-xwd|badges/games/mini)\.html"
     r"\?d=(\d{4}-\d{2}-\d{2})"
     r"&t=(\d+)"
     r"&c=([a-fA-F0-9]+)"
