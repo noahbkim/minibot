@@ -128,7 +128,7 @@ class Bot(disnake.Client):
     def __init__(self, config: configparser.ConfigParser) -> None:
         """Propagate config sections to plugins."""
 
-        intents = disnake.Intents(messages=True, message_content=True)
+        intents = disnake.Intents(messages=True, message_content=True, guilds=True)
         super().__init__(intents=intents)
 
         self.token = config.get("discord", "token")
@@ -293,11 +293,11 @@ class Bot(disnake.Client):
                 display_names = {}
                 fp = io.StringIO()
                 writer = csv.writer(fp)
-                writer.writerow(("display_name", "timestamp", "date", "seconds"))
+                writer.writerow(("display_name", "timestamp", "kind", "date", "seconds"))
                 for solve in Solve.filter(Solve.guild_id == message.guild.id):
                     if (display_name := display_names.get(solve.user_id)) is None:
                         display_name = display_names[solve.user_id] = (await self.fetch_user(solve.user_id)).display_name
-                    writer.writerow((display_name, solve.timestamp, solve.date, solve.seconds))
+                    writer.writerow((display_name, solve.timestamp, solve.kind, solve.date, solve.seconds))
                 bfp = io.BytesIO(fp.getvalue().encode())
                 await message.reply(file=disnake.File(bfp, "solves.csv"))
                 return
